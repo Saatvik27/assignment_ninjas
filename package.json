@@ -9,19 +9,29 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@google/genai": "^1.19.0",
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/face_detection": "^0.4.1646425229",
+    "@supabase/supabase-js": "^2.57.4",
+    "axios": "^1.12.1",
+    "groq-sdk": "^0.32.0",
+    "hot-formula-parser": "^4.0.0",
+    "luckysheet": "^2.1.13",
+    "next": "15.5.3",
+    "openai": "^5.20.1",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "next": "15.5.3"
+    "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
-    "typescript": "^5",
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@tailwindcss/postcss": "^4",
-    "tailwindcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "15.5.3",
-    "@eslint/eslintrc": "^3"
+    "tailwindcss": "^4",
+    "typescript": "^5"
   }
 }
