@@ -412,6 +412,37 @@ export default function InterviewPage() {
                 {isLoading ? 'Starting Interview...' : 'Start Interview'}
               </button>
             )}
+            
+            {/* Testing Shortcut - Remove in production */}
+            <button
+              onClick={async () => {
+                // Create a test session for Excel task testing
+                if (!candidateName.trim()) setCandidateName('Test User')
+                if (!candidateEmail.trim()) setCandidateEmail('test@example.com')
+                
+                try {
+                  const { data, error } = await supabase
+                    .from('sessions')
+                    .insert({
+                      candidate_name: candidateName || 'Test User',
+                      candidate_email: candidateEmail || 'test@example.com', 
+                      status: 'in_progress'
+                    })
+                    .select()
+                    .single()
+
+                  if (!error && data) {
+                    setSession(data)
+                    setCurrentPhase('excel_task')
+                  }
+                } catch (error) {
+                  console.error('Failed to create test session:', error)
+                }
+              }}
+              className="w-full bg-orange-500 text-white py-2 px-4 rounded-md hover:bg-orange-600 text-sm"
+            >
+              🧪 Skip to Excel Task (Testing)
+            </button>
           </div>
 
           <div className="mt-4 text-xs text-gray-500 text-center">

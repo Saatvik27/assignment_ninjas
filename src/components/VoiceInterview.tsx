@@ -30,7 +30,7 @@ export default function VoiceInterview({ sessionId, onPhaseComplete, shouldStart
   const [conversationHistory, setConversationHistory] = useState<Array<{question: string, answer: string, score?: number}>>([])
   const [totalScore, setTotalScore] = useState(0)
 
-  const maxQuestions = 5 // Limit for MVP
+  const maxQuestions = 8 // Phase 1: 8 interview questions
 
   // Generate first question when shouldStartInterview becomes true
   useEffect(() => {

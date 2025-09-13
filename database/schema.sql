@@ -42,6 +42,25 @@ CREATE TABLE excel_tasks (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- AI-generated Excel tasks
+CREATE TABLE ai_excel_tasks (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  session_id uuid REFERENCES sessions(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL,
+  task_number INTEGER,
+  title TEXT,
+  description TEXT,
+  business_context TEXT,
+  sample_data JSONB,
+  expected_formula TEXT,
+  expected_result TEXT,
+  difficulty_level TEXT,
+  alternative_solutions JSONB,
+  hints JSONB,
+  target_cell TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Proctoring events - face detection, tab switches, etc.
 CREATE TABLE proctoring_events (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,

@@ -9,145 +9,134 @@ interface ExcelTaskProps {
 
 interface Task {
   id: string
+  title?: string
   description: string
+  businessContext?: string
   expectedFormula: string
   expectedResult: string | number
   sampleData: any[][]
   targetCell: string
+  alternativeSolutions?: string[]
+  hints?: string[]
+  difficultyLevel?: string
 }
 
-// Sample Excel tasks for the interview
-const EXCEL_TASKS: Task[] = [
-  {
-    id: 'task1',
-    description: 'Calculate the total revenue for the "East" region using a SUMIF formula.',
-    expectedFormula: 'SUMIF(A:A,"East",B:B)',
-    expectedResult: 15000,
-    sampleData: [
-      ['Region', 'Revenue', 'Product'],
-      ['East', 5000, 'Product A'],
-      ['West', 3000, 'Product B'],
-      ['East', 7000, 'Product C'],
-      ['North', 4000, 'Product D'],
-      ['East', 3000, 'Product E'],
-      ['West', 2000, 'Product F']
-    ],
-    targetCell: 'D2'
-  },
-  {
-    id: 'task2',
-    description: 'Count how many sales were made in the "North" region using COUNTIF.',
-    expectedFormula: 'COUNTIF(A:A,"North")',
-    expectedResult: 1,
-    sampleData: [
-      ['Region', 'Revenue', 'Product'],
-      ['East', 5000, 'Product A'],
-      ['West', 3000, 'Product B'],
-      ['East', 7000, 'Product C'],
-      ['North', 4000, 'Product D'],
-      ['East', 3000, 'Product E'],
-      ['West', 2000, 'Product F']
-    ],
-    targetCell: 'D2'
-  }
-]
-
-declare global {
-  interface Window {
-    luckysheet: any
-  }
+interface AIExcelTask extends Task {
+  title: string
+  businessContext: string
+  alternativeSolutions: string[]
+  hints: string[]
+  difficultyLevel: string
 }
 
 export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps) {
-  const [currentTask, setCurrentTask] = useState<Task>(EXCEL_TASKS[0])
+  const [currentTask, setCurrentTask] = useState<Task | null>(null)
   const [taskIndex, setTaskIndex] = useState(0)
   const [userFormula, setUserFormula] = useState('')
   const [isEvaluating, setIsEvaluating] = useState(false)
   const [feedback, setFeedback] = useState<{correct: boolean, score: number, message: string} | null>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
+  const [isLoadingTask, setIsLoadingTask] = useState(false)
+  const [currentData, setCurrentData] = useState<any[][]>([])
+  const [totalTasks] = useState(2) // Phase 2: 2 Excel questions
 
+  // Generate AI task on component mount and when moving to next task
   useEffect(() => {
-    // Load Luckysheet
-    const loadLuckysheet = async () => {
-      if (typeof window === 'undefined') return
-
-      // Load Luckysheet CSS
-      const cssLink = document.createElement('link')
-      cssLink.rel = 'stylesheet'
-      cssLink.href = 'https://cdn.jsdelivr.net/npm/luckysheet@latest/dist/assets/css/luckysheet.css'
-      document.head.appendChild(cssLink)
-
-      // Load Luckysheet JS
-      const script = document.createElement('script')
-      script.src = 'https://cdn.jsdelivr.net/npm/luckysheet@latest/dist/assets/js/luckysheet.umd.js'
-      script.onload = () => initLuckysheet()
-      document.head.appendChild(script)
+    if (!currentTask) {
+      generateNextTask()
     }
-
-    loadLuckysheet()
   }, [])
 
-  const initLuckysheet = () => {
-    if (!window.luckysheet || !containerRef.current) return
-
-    const options = {
-      container: 'luckysheet-container',
-      title: 'Excel Skills Test',
-      lang: 'en',
-      data: [
-        {
-          name: 'Task Data',
-          color: '',
-          index: 0,
-          status: 1,
-          order: 0,
-          hide: 0,
-          row: 20,
-          column: 10,
-          defaultRowHeight: 25,
-          defaultColWidth: 100,
-          celldata: convertDataToCellData(currentTask.sampleData)
-        }
-      ],
-      hook: {
-        cellEditBefore: function(range: any) {
-          // Track cell edits
-          console.log('Cell edit started:', range)
-        },
-        cellUpdateAfter: function(r: number, c: number, oldValue: any, newValue: any) {
-          console.log('Cell updated:', { r, c, oldValue, newValue })
-          
-          // Check if this is the target cell and contains a formula
-          if (newValue && typeof newValue === 'object' && newValue.f) {
-            setUserFormula(newValue.f)
-          }
-        }
-      }
+  useEffect(() => {
+    // Update current data when task changes
+    if (currentTask) {
+      setCurrentData(currentTask.sampleData)
+      setUserFormula('')
+      setFeedback(null)
     }
+  }, [currentTask])
 
-    window.luckysheet.create(options)
+  const generateNextTask = async () => {
+    setIsLoadingTask(true)
+    try {
+      const response = await fetch('/api/excel-task-generator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          taskNumber: taskIndex + 1,
+          difficulty: getDifficultyLevel(),
+          previousPerformance: getPreviousPerformance()
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to generate task')
+      }
+
+      const result = await response.json()
+      if (result.success && result.task) {
+        setCurrentTask(result.task)
+        setCurrentData(result.task.sampleData)
+      } else {
+        throw new Error('Invalid task response')
+      }
+    } catch (error) {
+      console.error('Error generating AI task:', error)
+      // Fallback to a basic task if AI generation fails
+      setCurrentTask(getFallbackTask())
+    } finally {
+      setIsLoadingTask(false)
+    }
   }
 
-  const convertDataToCellData = (data: any[][]) => {
-    const celldata: any[] = []
-    
-    data.forEach((row, rowIndex) => {
-      row.forEach((cell, colIndex) => {
-        if (cell !== null && cell !== undefined && cell !== '') {
-          celldata.push({
-            r: rowIndex,
-            c: colIndex,
-            v: {
-              v: cell,
-              m: cell.toString(),
-              ct: { fa: 'General', t: typeof cell === 'number' ? 'n' : 'g' }
-            }
-          })
-        }
-      })
-    })
-    
-    return celldata
+  const getDifficultyLevel = (): 'beginner' | 'intermediate' | 'advanced' => {
+    if (taskIndex === 0) return 'beginner'
+    if (taskIndex === 1) return 'intermediate' 
+    return 'advanced'
+  }
+
+  const getPreviousPerformance = (): number => {
+    // TODO: Get actual performance from previous tasks
+    return 5 // Default middle performance
+  }
+
+  const getFallbackTask = (): Task => {
+    return {
+      id: `fallback-${taskIndex}`,
+      title: 'Excel Analysis Task',
+      description: 'Calculate the total revenue for the "East" region using a SUMIF formula.',
+      businessContext: 'The sales team needs to analyze regional performance for quarterly reporting.',
+      expectedFormula: 'SUMIF(A:A,"East",B:B)',
+      expectedResult: 15000,
+      sampleData: [
+        ['Region', 'Revenue', 'Product'],
+        ['East', 5000, 'Product A'],
+        ['West', 3000, 'Product B'],
+        ['East', 7000, 'Product C'],
+        ['North', 4000, 'Product D'],
+        ['East', 3000, 'Product E'],
+        ['West', 2000, 'Product F']
+      ],
+      targetCell: 'D2',
+      alternativeSolutions: ['SUMIFS(B:B,A:A,"East")'],
+      hints: ['Use SUMIF function', 'Check column references', 'Verify criteria'],
+      difficultyLevel: 'intermediate'
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Prevent common copy/paste keyboard shortcuts
+    if (e.ctrlKey && (e.key === 'c' || e.key === 'v' || e.key === 'a' || e.key === 'x')) {
+      e.preventDefault()
+    }
+    // Prevent F12 (dev tools)
+    if (e.key === 'F12') {
+      e.preventDefault()
+    }
+  }
+
+  const handleFormulaChange = (formula: string) => {
+    setUserFormula(formula)
   }
 
   const evaluateFormula = async () => {
@@ -156,41 +145,47 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
       return
     }
 
+    if (!currentTask) {
+      alert('No task available')
+      return
+    }
+
     setIsEvaluating(true)
     
     try {
-      // Parse and evaluate the user's formula
-      const cleanFormula = userFormula.replace(/^=/, '') // Remove leading =
-      
-      // Simple formula validation and scoring
-      let isCorrect = false
-      let score = 0
-      let message = ''
+      // Send to backend for advanced evaluation
+      const response = await fetch('/api/excel-task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'evaluate_formula',
+          sessionId,
+          taskId: currentTask.id,
+          userFormula: userFormula.trim(),
+          expectedFormula: currentTask.expectedFormula,
+          expectedResult: currentTask.expectedResult,
+          taskDescription: currentTask.description
+        })
+      })
 
-      // Check if formula matches expected pattern
-      const expectedPattern = currentTask.expectedFormula.toUpperCase()
-      const userPattern = cleanFormula.toUpperCase()
-
-      if (userPattern === expectedPattern) {
-        isCorrect = true
-        score = 10
-        message = 'Perfect! Your formula is exactly correct.'
-      } else if (userPattern.includes('SUMIF') && currentTask.expectedFormula.includes('SUMIF')) {
-        // Partial credit for using the right function
-        score = 6
-        message = 'Good! You used the correct function, but check your syntax and parameters.'
-      } else if (userPattern.includes('COUNTIF') && currentTask.expectedFormula.includes('COUNTIF')) {
-        score = 6
-        message = 'Good! You used the correct function, but check your syntax and parameters.'
-      } else {
-        score = 2
-        message = 'The formula needs work. Review the task requirements and try again.'
+      if (!response.ok) {
+        throw new Error('Evaluation failed')
       }
 
-      setFeedback({ correct: isCorrect, score, message })
-
-      // Save to database
-      await saveTaskResult(isCorrect, score, userFormula, message)
+      const result = await response.json()
+      
+      if (result.success) {
+        setFeedback({
+          correct: result.isCorrect,
+          score: result.score,
+          message: result.feedback
+        })
+        
+        // Also save the result
+        await saveTaskResult(result.isCorrect, result.score, userFormula, result.feedback)
+      } else {
+        throw new Error(result.error || 'Evaluation failed')
+      }
 
     } catch (error) {
       console.error('Formula evaluation error:', error)
@@ -205,6 +200,8 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
   }
 
   const saveTaskResult = async (isCorrect: boolean, score: number, formula: string, feedback: string) => {
+    if (!currentTask) return
+    
     try {
       const response = await fetch('/api/excel-task', {
         method: 'POST',
@@ -231,18 +228,13 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
   }
 
   const nextTask = () => {
-    if (taskIndex < EXCEL_TASKS.length - 1) {
+    if (taskIndex < totalTasks - 1) {
       const newIndex = taskIndex + 1
       setTaskIndex(newIndex)
-      setCurrentTask(EXCEL_TASKS[newIndex])
       setUserFormula('')
       setFeedback(null)
-      
-      // Reinitialize Luckysheet with new data
-      if (window.luckysheet) {
-        window.luckysheet.destroy()
-        setTimeout(() => initLuckysheet(), 500)
-      }
+      setCurrentTask(null) // Clear current task to trigger AI generation
+      generateNextTask()
     } else {
       onPhaseComplete()
     }
@@ -253,46 +245,124 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-6">
+    <div 
+      className="max-w-6xl mx-auto p-6" 
+      onCopy={(e) => e.preventDefault()} 
+      onPaste={(e) => e.preventDefault()}
+      onContextMenu={(e) => e.preventDefault()}
+      onKeyDown={handleKeyDown}
+      style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+    >
       <div className="bg-white rounded-lg shadow-lg p-6">
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Excel Practical Task</h2>
           <div className="flex justify-between items-center">
-            <p className="text-gray-600">Task {taskIndex + 1} of {EXCEL_TASKS.length}</p>
+            <p className="text-gray-600">Task {taskIndex + 1} of {totalTasks}</p>
           </div>
           
           {/* Progress bar */}
           <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
             <div 
               className="bg-green-600 h-2 rounded-full transition-all duration-300" 
-              style={{ width: `${((taskIndex + 1) / EXCEL_TASKS.length) * 100}%` }}
+              style={{ width: `${((taskIndex + 1) / totalTasks) * 100}%` }}
             ></div>
           </div>
         </div>
 
         {/* Task Description */}
         <div className="mb-6">
-          <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-md">
+          <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-md" style={{ userSelect: 'text', WebkitUserSelect: 'text' }}>
             <h3 className="font-medium text-blue-900 mb-2">Task Instructions:</h3>
-            <p className="text-blue-800">{currentTask.description}</p>
-            <p className="text-sm text-blue-700 mt-2">
-              Enter your formula in cell <strong>{currentTask.targetCell}</strong>
+            <p className="text-blue-800">{currentTask?.description}</p>
+            {currentTask?.businessContext && (
+              <p className="text-sm text-blue-700 mt-2">
+                <strong>Business Context:</strong> {currentTask.businessContext}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Excel-like Data Table */}
+        <div className="mb-6">
+          <div className="bg-gray-50 p-4 rounded-lg border" style={{ userSelect: 'text', WebkitUserSelect: 'text' }}>
+            <h4 className="font-medium text-gray-900 mb-3">Sample Data:</h4>
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-collapse border border-gray-300">
+                <thead>
+                  <tr>
+                    <th className="border border-gray-300 px-2 py-1 bg-gray-100 text-xs font-medium"></th>
+                    {['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((col) => (
+                      <th key={col} className="border border-gray-300 px-2 py-1 bg-gray-100 text-xs font-medium w-20">
+                        {col}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentData.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      <td className="border border-gray-300 px-2 py-1 bg-gray-100 text-xs font-medium text-center">
+                        {rowIndex + 1}
+                      </td>
+                      {Array.from({ length: 7 }, (_, colIndex) => {
+                        const value = row[colIndex] || ''
+                        const cellRef = String.fromCharCode(65 + colIndex) + (rowIndex + 1)
+                        const isTargetCell = cellRef === currentTask?.targetCell
+                        
+                        return (
+                          <td
+                            key={colIndex}
+                            className={`border border-gray-300 px-2 py-1 text-sm ${
+                              isTargetCell 
+                                ? 'bg-blue-100 font-medium' 
+                                : rowIndex === 0 
+                                  ? 'bg-gray-50 font-medium'
+                                  : 'bg-white'
+                            }`}
+                          >
+                            {isTargetCell ? (
+                              <span className="text-blue-600">
+                                {userFormula ? `=${userFormula}` : '{Formula}'}
+                              </span>
+                            ) : (
+                              value
+                            )}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-gray-600 mt-2">
+              Target cell <strong>{currentTask?.targetCell}</strong> is highlighted in blue
             </p>
           </div>
         </div>
 
-        {/* Luckysheet Container */}
-        <div className="mb-6">
-          <div 
-            id="luckysheet-container"
-            ref={containerRef}
-            style={{ 
-              width: '100%', 
-              height: '400px',
-              border: '1px solid #ddd',
-              borderRadius: '4px'
-            }}
-          ></div>
+        {/* Formula Input */}
+        <div className="mb-6" onCopy={(e) => e.preventDefault()} onPaste={(e) => e.preventDefault()}>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Enter your Excel formula:
+          </label>
+          <div className="flex items-center space-x-2">
+            <span className="text-gray-600">=</span>
+            <input
+              type="text"
+              value={userFormula}
+              onChange={(e) => handleFormulaChange(e.target.value)}
+              placeholder="Type your formula here..."
+              onCopy={(e) => e.preventDefault()}
+              onPaste={(e) => e.preventDefault()}
+              onContextMenu={(e) => e.preventDefault()}
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+              style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+            />
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            Enter the formula without the leading "=" sign. Copy/paste is disabled.
+          </p>
         </div>
 
         {/* Current Formula Display */}
@@ -347,7 +417,7 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
                 onClick={nextTask}
                 className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-md"
               >
-                {taskIndex < EXCEL_TASKS.length - 1 ? 'Next Task' : 'Complete Interview'}
+                {taskIndex < totalTasks - 1 ? 'Next Task' : 'Complete Interview'}
               </button>
             )}
           </div>

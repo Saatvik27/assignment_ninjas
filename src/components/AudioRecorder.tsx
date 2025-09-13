@@ -9,13 +9,15 @@ interface AudioRecorderProps {
 }
 
 // Check if Web Speech API is supported
-const isWebSpeechSupported = typeof window !== 'undefined' && 
-  'webkitSpeechRecognition' in window || 'SpeechRecognition' in window
+const getWebSpeechSupport = () => {
+  if (typeof window === 'undefined') return false
+  return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window
+}
 
 export default function AudioRecorder({ sessionId, onTranscriptReceived, isEnabled }: AudioRecorderProps) {
   const [isRecording, setIsRecording] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
-  const [useWebSpeech, setUseWebSpeech] = useState(isWebSpeechSupported)
+  const [useWebSpeech, setUseWebSpeech] = useState(false)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -23,8 +25,13 @@ export default function AudioRecorder({ sessionId, onTranscriptReceived, isEnabl
   const recognitionRef = useRef<any>(null)
 
   useEffect(() => {
+    // Initialize web speech support on client side
+    setUseWebSpeech(getWebSpeechSupport())
+  }, [])
+
+  useEffect(() => {
     // Initialize Web Speech API if available
-    if (isWebSpeechSupported && useWebSpeech) {
+    if (getWebSpeechSupport() && useWebSpeech) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
       const recognition = new SpeechRecognition()
       
