@@ -274,6 +274,18 @@ export async function POST(request: NextRequest) {
       // Continue anyway - the task was generated successfully
     }
 
+    // Log the generated task solution for testing purposes
+    console.log('=== EXCEL TASK GENERATED ===')
+    console.log('Task Number:', taskNumber)
+    console.log('Title:', aiTask.title)
+    console.log('Description:', aiTask.description)
+    console.log('Expected Formula:', aiTask.expectedFormula)
+    console.log('Expected Result:', aiTask.expectedResult)
+    console.log('Alternative Solutions:', aiTask.alternativeSolutions)
+    console.log('Target Cell:', aiTask.targetCell)
+    console.log('Difficulty:', aiTask.difficultyLevel)
+    console.log('============================')
+
     return NextResponse.json({
       success: true,
       task: aiTask

@@ -1,11 +1,17 @@
 import { GoogleGenAI } from "@google/genai"
+import { makeGeminiRequest, geminiRotator } from "./gemini-rotator"
 
-// Initialize Gemini client  
-const ai = new GoogleGenAI({})
-
-// Free alternative to OpenAI GPT using Google Gemini
-export async function generateInterviewQuestion(questionNumber: number = 1, difficulty: 'beginner' | 'intermediate' | 'advanced' = 'intermediate'): Promise<string> {
+// Free alternative to OpenAI GPT using Google Gemini with API key rotation
+export async function generateInterviewQuestion(
+  questionNumber: number = 1, 
+  difficulty: 'beginner' | 'intermediate' | 'advanced' = 'intermediate',
+  previousQuestions: string[] = []
+): Promise<string> {
   try {
+    const previousQuestionsText = previousQuestions.length > 0 
+      ? `\n\nPreviously asked questions (DO NOT repeat these):\n${previousQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
+      : ''
+    
     const prompt = `You are an Excel expert creating theoretical interview questions for a ${difficulty} level candidate.
 
 This is question #${questionNumber} in the interview sequence.
@@ -17,6 +23,7 @@ Requirements:
 - Ask about Excel functions, features, or concepts directly
 - Questions should be answerable with explanations, not step-by-step instructions
 - For ${difficulty} level: ${getDifficultyGuidelines(difficulty)}
+- MUST be different from any previously asked questions
 - Examples of good theoretical questions:
   * "What is the difference between VLOOKUP and INDEX-MATCH functions?"
   * "Explain how Excel handles circular references"
@@ -28,19 +35,23 @@ Avoid:
 - Multi-step practical problems
 - Worksheet setups or specific business contexts
 - Questions requiring formula writing
+- Repeating any previously asked questions${previousQuestionsText}
 
 Return only the theoretical question text, no extra formatting.`
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-pro", // Updated to faster Gemini 2.5 Pro model
-      contents: prompt,
+    const response = await makeGeminiRequest(async (client) => {
+      return await client.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+      })
     })
+    
     const text = response.text || ''
     
     return text.trim() || 'What is the difference between VLOOKUP and INDEX-MATCH functions in Excel?'
   } catch (error) {
     console.error('Gemini question generation error:', error)
-    return getFallbackQuestion(difficulty)
+    return getFallbackQuestion(difficulty, questionNumber)
   }
 }
 
@@ -73,10 +84,13 @@ Respond in JSON format:
   "followupQuestion": "<next question to ask>"
 }`
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-pro", // Updated to faster Gemini 2.5 Pro model
-      contents: prompt,
+    const response = await makeGeminiRequest(async (client) => {
+      return await client.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+      })
     })
+    
     const text = response.text || ''
     
     try {
@@ -125,13 +139,31 @@ function getDifficultyGuidelines(difficulty: string): string {
   }
 }
 
-function getFallbackQuestion(difficulty: string): string {
+function getFallbackQuestion(difficulty: string, questionNumber: number = 1): string {
   const fallbacks = {
-    beginner: 'What is the difference between a formula and a function in Excel?',
-    intermediate: 'Explain the key differences between VLOOKUP and INDEX-MATCH functions.',
-    advanced: 'What are the advantages and limitations of using array formulas in Excel?'
+    beginner: [
+      'What is the difference between a formula and a function in Excel?',
+      'How do you create and use cell references in Excel?',
+      'What are the different data types that Excel can handle?',
+      'Explain the concept of relative vs absolute cell references.'
+    ],
+    intermediate: [
+      'Explain the key differences between VLOOKUP and INDEX-MATCH functions.',
+      'What is the purpose and functionality of PivotTables in Excel?',
+      'How do conditional formatting rules work in Excel?',
+      'What are the advantages of using named ranges in Excel?'
+    ],
+    advanced: [
+      'What are the advantages and limitations of using array formulas in Excel?',
+      'How do you optimize Excel performance for large datasets?',
+      'Explain the concept of volatile functions and their impact on workbook performance.',
+      'What are the different ways to handle circular references in Excel?'
+    ]
   }
-  return fallbacks[difficulty as keyof typeof fallbacks] || fallbacks.intermediate
+  
+  const questionSet = fallbacks[difficulty as keyof typeof fallbacks] || fallbacks.intermediate
+  const index = (questionNumber - 1) % questionSet.length
+  return questionSet[index]
 }
 
 // Keep original OpenAI functions as backup

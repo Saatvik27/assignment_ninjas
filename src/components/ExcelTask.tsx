@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 interface ExcelTaskProps {
   sessionId: string
@@ -35,16 +35,57 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
   const [userFormula, setUserFormula] = useState('')
   const [isEvaluating, setIsEvaluating] = useState(false)
   const [feedback, setFeedback] = useState<{correct: boolean, score: number, message: string} | null>(null)
+  const [checkResult, setCheckResult] = useState<{ isCorrect: boolean; message: string } | null>(null)
   const [isLoadingTask, setIsLoadingTask] = useState(false)
   const [currentData, setCurrentData] = useState<any[][]>([])
   const [totalTasks] = useState(2) // Phase 2: 2 Excel questions
+  const [timeRemaining, setTimeRemaining] = useState(10 * 60) // 10 minutes in seconds per task
+  const [isTimeUp, setIsTimeUp] = useState(false)
+  const [timerInterval, setTimerInterval] = useState<NodeJS.Timeout | null>(null)
+  const [showInstructions, setShowInstructions] = useState(true)
+  const isGeneratingTaskRef = useRef(false)
 
   // Generate AI task on component mount and when moving to next task
   useEffect(() => {
-    if (!currentTask) {
+    if (!currentTask && !isGeneratingTaskRef.current) {
       generateNextTask()
     }
   }, [])
+
+  // Timer effect
+  useEffect(() => {
+    if (currentTask && !isTimeUp) {
+      const interval = setInterval(() => {
+        setTimeRemaining(prev => {
+          if (prev <= 1) {
+            setIsTimeUp(true)
+            clearInterval(interval)
+            // Auto-submit when time is up
+            if (!isEvaluating) {
+              evaluateFormula()
+            }
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+      
+      setTimerInterval(interval)
+      
+      return () => {
+        clearInterval(interval)
+      }
+    }
+  }, [currentTask, isTimeUp])
+
+  // Reset timer when moving to next task
+  useEffect(() => {
+    setTimeRemaining(10 * 60) // Reset to 10 minutes
+    setIsTimeUp(false)
+    if (timerInterval) {
+      clearInterval(timerInterval)
+    }
+  }, [taskIndex])
 
   useEffect(() => {
     // Update current data when task changes
@@ -55,9 +96,24 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
     }
   }, [currentTask])
 
+  // Format time for display
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
   const generateNextTask = async () => {
+    if (isGeneratingTaskRef.current) {
+      console.log('Already generating task, ignoring duplicate call')
+      return
+    }
+    
+    isGeneratingTaskRef.current = true
     setIsLoadingTask(true)
+    
     try {
+      console.log('Generating AI Excel task', taskIndex + 1, 'for session', sessionId)
       const response = await fetch('/api/excel-task-generator', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -75,6 +131,14 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
 
       const result = await response.json()
       if (result.success && result.task) {
+        console.log('=== EXCEL TASK LOADED ===')
+        console.log('Task:', taskIndex + 1, 'of', totalTasks)
+        console.log('Title:', result.task.title)
+        console.log('Expected Solution:', result.task.expectedFormula)
+        console.log('Expected Result:', result.task.expectedResult)
+        console.log('Alternative Solutions:', result.task.alternativeSolutions)
+        console.log('========================')
+        
         setCurrentTask(result.task)
         setCurrentData(result.task.sampleData)
       } else {
@@ -86,6 +150,7 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
       setCurrentTask(getFallbackTask())
     } finally {
       setIsLoadingTask(false)
+      isGeneratingTaskRef.current = false
     }
   }
 
@@ -137,11 +202,67 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
 
   const handleFormulaChange = (formula: string) => {
     setUserFormula(formula)
+    setCheckResult(null) // Clear previous check results when formula changes
+  }
+
+  const checkFormula = async () => {
+    if (!userFormula.trim()) {
+      alert('Please enter a formula to check')
+      return
+    }
+
+    if (!currentTask) {
+      alert('No task available')
+      return
+    }
+
+    setIsEvaluating(true)
+    setCheckResult(null)
+    
+    try {
+      const response = await fetch('/api/excel-task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'check_formula',
+          sessionId,
+          taskId: currentTask.id,
+          userFormula: userFormula.trim(),
+          expectedFormula: currentTask.expectedFormula,
+          expectedResult: currentTask.expectedResult,
+          taskDescription: currentTask.description
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Check failed')
+      }
+
+      const result = await response.json()
+      
+      if (result.success) {
+        setCheckResult({
+          isCorrect: result.isCorrect,
+          message: result.isCorrect ? 'Correct! Your formula is right.' : 'Not quite right. Try again.'
+        })
+      } else {
+        throw new Error(result.error || 'Check failed')
+      }
+
+    } catch (error) {
+      console.error('Formula check error:', error)
+      setCheckResult({
+        isCorrect: false,
+        message: 'Error checking formula. Please try again.'
+      })
+    } finally {
+      setIsEvaluating(false)
+    }
   }
 
   const evaluateFormula = async () => {
     if (!userFormula.trim()) {
-      alert('Please enter a formula in the target cell')
+      alert('Please enter a formula before submitting')
       return
     }
 
@@ -153,7 +274,6 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
     setIsEvaluating(true)
     
     try {
-      // Send to backend for advanced evaluation
       const response = await fetch('/api/excel-task', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -169,79 +289,56 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
       })
 
       if (!response.ok) {
-        throw new Error('Evaluation failed')
+        throw new Error('Submission failed')
       }
 
       const result = await response.json()
       
       if (result.success) {
+        // Show saving message instead of score
         setFeedback({
-          correct: result.isCorrect,
-          score: result.score,
-          message: result.feedback
+          correct: true, // Don't show actual result
+          score: 0, // Don't show score
+          message: 'Your response has been saved and evaluated.'
         })
         
-        // Also save the result
-        await saveTaskResult(result.isCorrect, result.score, userFormula, result.feedback)
+        // Move to next task after a short delay
+        setTimeout(() => {
+          moveToNextTask()
+        }, 2000)
       } else {
-        throw new Error(result.error || 'Evaluation failed')
+        throw new Error(result.error || 'Submission failed')
       }
 
     } catch (error) {
-      console.error('Formula evaluation error:', error)
+      console.error('Formula submission error:', error)
       setFeedback({ 
         correct: false, 
         score: 0, 
-        message: 'Error evaluating formula. Please check your syntax.' 
+        message: 'Error submitting formula. Please try again.' 
       })
     } finally {
       setIsEvaluating(false)
     }
   }
 
-  const saveTaskResult = async (isCorrect: boolean, score: number, formula: string, feedback: string) => {
-    if (!currentTask) return
-    
-    try {
-      const response = await fetch('/api/excel-task', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          taskId: currentTask.id,
-          taskDescription: currentTask.description,
-          expectedFormula: currentTask.expectedFormula,
-          candidateFormula: formula,
-          isCorrect,
-          score,
-          cellReference: currentTask.targetCell,
-          feedback
-        })
-      })
-
-      if (!response.ok) {
-        console.error('Failed to save task result')
-      }
-    } catch (error) {
-      console.error('Error saving task result:', error)
-    }
-  }
-
-  const nextTask = () => {
+  const moveToNextTask = () => {
     if (taskIndex < totalTasks - 1) {
       const newIndex = taskIndex + 1
+      console.log('=== MOVING TO NEXT EXCEL TASK ===')
+      console.log('From task:', taskIndex + 1, 'to task:', newIndex + 1)
+      console.log('Resetting: formula, feedback, task data')
+      console.log('================================')
+      
       setTaskIndex(newIndex)
       setUserFormula('')
       setFeedback(null)
+      setCheckResult(null)
       setCurrentTask(null) // Clear current task to trigger AI generation
       generateNextTask()
     } else {
       onPhaseComplete()
     }
-  }
-
-  const skipTask = () => {
-    nextTask()
   }
 
   return (
@@ -254,6 +351,37 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
       style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
     >
       <div className="bg-white rounded-lg shadow-lg p-6">
+        {showInstructions ? (
+          <div className="text-center">
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-gray-900 mb-4">Phase 2: Excel Practical Tasks</h2>
+              <div className="bg-green-50 border border-green-200 rounded-lg p-6 text-left max-w-2xl mx-auto">
+                <h3 className="text-lg font-semibold text-green-900 mb-3">Instructions</h3>
+                <ul className="space-y-2 text-green-800">
+                  <li>• You will complete <strong>2 Excel practical tasks</strong></li>
+                  <li>• Each task has a <strong>10-minute time limit</strong></li>
+                  <li>• Read the business scenario and analyze the provided data</li>
+                  <li>• Enter the required formula in the designated cell</li>
+                  <li>• Use <strong>"Check Formula"</strong> to test if your formula is correct</li>
+                  <li>• When ready, click <strong>"Submit & Continue"</strong> to proceed</li>
+                  <li>• Copy and paste functions are disabled for security</li>
+                </ul>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                setShowInstructions(false)
+                if (!currentTask) {
+                  generateNextTask()
+                }
+              }}
+              className="bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-8 rounded-md text-lg"
+            >
+              Start Excel Tasks
+            </button>
+          </div>
+        ) : (
+          <>
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Excel Practical Task</h2>
           <div className="flex justify-between items-center">
@@ -266,6 +394,21 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
               className="bg-green-600 h-2 rounded-full transition-all duration-300" 
               style={{ width: `${((taskIndex + 1) / totalTasks) * 100}%` }}
             ></div>
+          </div>
+          
+          {/* Timer Display */}
+          <div className="mt-4 text-center">
+            <div className={`inline-flex items-center px-4 py-2 rounded-lg font-medium text-lg ${
+              timeRemaining <= 60 ? 'bg-red-100 text-red-800' : 
+              timeRemaining <= 300 ? 'bg-yellow-100 text-yellow-800' : 
+              'bg-green-100 text-green-800'
+            }`}>
+              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Time Remaining: {formatTime(timeRemaining)}
+              {isTimeUp && <span className="ml-2 text-red-600 font-bold">TIME UP!</span>}
+            </div>
           </div>
         </div>
 
@@ -381,11 +524,7 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
             <div className={`border-l-4 p-4 rounded-md ${
               feedback.correct ? 'bg-green-50 border-green-400' : 'bg-yellow-50 border-yellow-400'
             }`}>
-              <h4 className={`font-medium mb-2 ${
-                feedback.correct ? 'text-green-900' : 'text-yellow-900'
-              }`}>
-                Score: {feedback.score}/10
-              </h4>
+              {/* Removed score display for candidates */}
               <p className={feedback.correct ? 'text-green-800' : 'text-yellow-800'}>
                 {feedback.message}
               </p>
@@ -394,34 +533,45 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
         )}
 
         {/* Actions */}
-        <div className="flex justify-between">
-          <button
-            onClick={skipTask}
-            className="text-gray-600 hover:text-gray-800 text-sm font-medium"
-            disabled={isEvaluating}
-          >
-            Skip Task
-          </button>
-          
+        <div className="flex justify-between">          
           <div className="space-x-3">
             <button
-              onClick={evaluateFormula}
+              onClick={checkFormula}
               disabled={isEvaluating || !userFormula}
               className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-md"
             >
-              {isEvaluating ? 'Evaluating...' : 'Check Formula'}
+              {isEvaluating ? 'Checking...' : 'Check Formula'}
             </button>
             
-            {feedback && (
-              <button
-                onClick={nextTask}
-                className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-md"
-              >
-                {taskIndex < totalTasks - 1 ? 'Next Task' : 'Complete Interview'}
-              </button>
-            )}
+            <button
+              onClick={evaluateFormula}
+              disabled={isEvaluating || !userFormula}
+              className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-md"
+            >
+              {isEvaluating ? 'Submitting...' : (taskIndex < totalTasks - 1 ? 'Submit & Continue' : 'Submit & Complete')}
+            </button>
           </div>
         </div>
+
+        {/* Check Result Display */}
+        {checkResult && (
+          <div className={`mt-4 p-4 rounded-lg ${checkResult.isCorrect ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+            <div className={`font-medium ${checkResult.isCorrect ? 'text-green-800' : 'text-red-800'}`}>
+              {checkResult.message}
+            </div>
+          </div>
+        )}
+
+        {/* Feedback Display */}
+        {feedback && (
+          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="text-blue-800 font-medium">
+              {feedback.message}
+            </div>
+          </div>
+        )}
+        </>
+        )}
       </div>
     </div>
   )

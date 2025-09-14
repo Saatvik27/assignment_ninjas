@@ -7,6 +7,7 @@ import VoiceInterview from '@/components/VoiceInterview'
 import ExcelTask from '@/components/ExcelTask'
 import FaceDetection from '@/components/FaceDetection'
 import ScreenRecording from '@/components/ScreenRecording'
+import CompletionSummary from '@/components/CompletionSummary'
 
 interface MediaPermissions {
   camera: boolean
@@ -24,8 +25,9 @@ export default function InterviewPage() {
   const [candidateName, setCandidateName] = useState('')
   const [candidateEmail, setCandidateEmail] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [currentPhase, setCurrentPhase] = useState<'setup' | 'voice_interview' | 'excel_task' | 'completed'>('setup')
+  const [currentPhase, setCurrentPhase] = useState<'setup' | 'intro_audio' | 'voice_interview' | 'excel_task' | 'completed'>('setup')
   const [introductionComplete, setIntroductionComplete] = useState(false)
+  const [showVoiceInstructions, setShowVoiceInstructions] = useState(false)
   const [firstQuestion, setFirstQuestion] = useState<string>('')
 
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -211,7 +213,7 @@ export default function InterviewPage() {
 
       console.log('Session created:', data)
       setSession(data)
-      setCurrentPhase('voice_interview')
+      setCurrentPhase('intro_audio')
       
       // Play AI introduction with the session data directly
       await playIntroduction(data)
@@ -229,9 +231,9 @@ export default function InterviewPage() {
       const currentSession = sessionData || session
       console.log('Starting introduction with session:', currentSession?.id)
       
-      // First, generate the first question while playing introduction
-      console.log('Generating first question...')
-      const questionResponse = await fetch('/api/interview', {
+      // Start generating the first question in the background (don't wait)
+      console.log('Starting first question generation in background...')
+      fetch('/api/interview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -240,31 +242,32 @@ export default function InterviewPage() {
           questionNumber: 1,
           difficulty: 'intermediate'
         })
+      }).then(async (questionResponse) => {
+        console.log('Question response status:', questionResponse.status)
+        if (questionResponse.ok) {
+          const questionResult = await questionResponse.json()
+          console.log('Question result:', questionResult)
+          if (questionResult.success) {
+            setFirstQuestion(questionResult.question)
+            console.log('First question set:', questionResult.question)
+          }
+        } else {
+          console.error('Question generation failed:', await questionResponse.text())
+          setFirstQuestion('What is the difference between VLOOKUP and INDEX-MATCH functions in Excel?')
+        }
+      }).catch(error => {
+        console.error('Question generation error:', error)
+        setFirstQuestion('What is the difference between VLOOKUP and INDEX-MATCH functions in Excel?')
       })
 
-      let generatedQuestion = 'What is the difference between VLOOKUP and INDEX-MATCH functions in Excel?'
-      
-      console.log('Question response status:', questionResponse.status)
-      if (questionResponse.ok) {
-        const questionResult = await questionResponse.json()
-        console.log('Question result:', questionResult)
-        if (questionResult.success) {
-          generatedQuestion = questionResult.question
-        }
-      } else {
-        console.error('Question generation failed:', await questionResponse.text())
-      }
-
-      setFirstQuestion(generatedQuestion)
-      console.log('First question set:', generatedQuestion)
-
-      // Now play introduction with the first question ready
+      // Play introduction immediately (don't wait for question generation)
       console.log('Playing introduction with TTS...')
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: `Hello ${candidateName}! I'm your AI interviewer today. We'll start with some conceptual Excel questions, then move to a practical task. Please speak clearly and take your time with your answers. Are you ready to begin? Here's your first question: ${generatedQuestion}`
+          text: `Hello ${candidateName}! I'm your AI interviewer today. We'll start with some conceptual Excel questions, then move to a practical task. Please speak clearly and take your time with your answers. After this introduction, you'll see instructions for Phase 1. Good luck!`,
+          speechRate: 0.75  // Slow down intro as well
         })
       })
       
@@ -275,25 +278,34 @@ export default function InterviewPage() {
         if (data.audioUrl) {
           console.log('Playing audio from URL:', data.audioUrl)
           const audio = new Audio(data.audioUrl)
-          await audio.play()
+          // Wait for audio to actually finish playing before proceeding
+          await new Promise((resolve) => {
+            audio.onended = resolve
+            audio.onerror = resolve // Also resolve on error to prevent hanging
+            audio.play()
+          })
           console.log('Audio finished playing')
-          // Mark introduction as complete after audio finishes playing
+          // Mark introduction as complete and show voice instructions button after audio finishes playing
           setIntroductionComplete(true)
+          setShowVoiceInstructions(true)
         } else {
           console.warn('No audioUrl in TTS response')
           setIntroductionComplete(true)
+          setShowVoiceInstructions(true)
         }
       } else {
         console.error('TTS failed:', await response.text())
         // Don't wait for TTS, proceed with interview
-        alert(`Introduction: Hello ${candidateName}! I'm your AI interviewer today. Here's your first question: ${generatedQuestion}`)
+        alert(`Introduction: Hello ${candidateName}! I'm your AI interviewer today. We'll start with some conceptual Excel questions, then move to a practical task. Please speak clearly and take your time with your answers.`)
         setIntroductionComplete(true)
+        setShowVoiceInstructions(true)
       }
     } catch (error) {
       console.error('Failed to play introduction:', error)
       // Even if TTS fails, allow interview to proceed with fallback question
       setFirstQuestion('What is the difference between VLOOKUP and INDEX-MATCH functions in Excel?')
       setIntroductionComplete(true)
+      setShowVoiceInstructions(true)
     }
   }
 
@@ -414,6 +426,7 @@ export default function InterviewPage() {
             )}
             
             {/* Testing Shortcut - Remove in production */}
+            {/*
             <button
               onClick={async () => {
                 // Create a test session for Excel task testing
@@ -443,6 +456,7 @@ export default function InterviewPage() {
             >
               🧪 Skip to Excel Task (Testing)
             </button>
+            */}
           </div>
 
           <div className="mt-4 text-xs text-gray-500 text-center">
@@ -465,12 +479,17 @@ export default function InterviewPage() {
           <div className="mb-4">
             <div className="flex space-x-4">
               <span className={`px-3 py-1 rounded-full text-sm ${
+                currentPhase === 'intro_audio' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-600'
+              }`}>
+                Introduction
+              </span>
+              <span className={`px-3 py-1 rounded-full text-sm ${
                 currentPhase === 'voice_interview' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'
               }`}>
                 Voice Interview
               </span>
               <span className={`px-3 py-1 rounded-full text-sm ${
-                currentPhase === 'excel_task' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'
+                currentPhase === 'excel_task' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
               }`}>
                 Excel Task
               </span>
@@ -515,10 +534,51 @@ export default function InterviewPage() {
           </div>
 
           {/* Phase-specific content */}
+          {currentPhase === 'intro_audio' && (
+            <div className="max-w-2xl mx-auto text-center">
+              <div className="bg-white rounded-lg shadow-lg p-8">
+                <h2 className="text-2xl font-bold text-gray-900 mb-6">Welcome to Your Interview</h2>
+                
+                {!introductionComplete ? (
+                  <div className="flex flex-col items-center space-y-4">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-4 h-4 bg-blue-500 rounded-full animate-pulse"></div>
+                      <p className="text-lg text-blue-600">Please listen to the introduction...</p>
+                    </div>
+                    <p className="text-gray-600">Your AI interviewer is providing important information about the interview process.</p>
+                  </div>
+                ) : showVoiceInstructions ? (
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-center space-x-2">
+                      <svg className="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <p className="text-lg text-green-600">Introduction complete!</p>
+                    </div>
+                    <p className="text-gray-600 mb-6">Now let's review the instructions for Phase 1 of your interview.</p>
+                    <button
+                      onClick={() => setCurrentPhase('voice_interview')}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-8 rounded-md text-lg"
+                    >
+                      Read Phase 1 Instructions
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-gray-600">Waiting...</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {currentPhase === 'voice_interview' && session && (
             <VoiceInterview 
               sessionId={session.id}
-              onPhaseComplete={() => setCurrentPhase('excel_task')}
+              onPhaseComplete={() => {
+                console.log('Voice interview completed, transitioning to Excel task')
+                setCurrentPhase('excel_task')
+              }}
               shouldStartInterview={introductionComplete}
               firstQuestion={firstQuestion}
             />
@@ -527,42 +587,35 @@ export default function InterviewPage() {
           {currentPhase === 'excel_task' && session && (
             <ExcelTask
               sessionId={session.id}
-              onPhaseComplete={() => setCurrentPhase('completed')}
+              onPhaseComplete={() => {
+                // Update session status to completed and set end time
+                const updateSessionCompletion = async () => {
+                  try {
+                    const { error } = await supabase
+                      .from('sessions')
+                      .update({
+                        status: 'completed',
+                        ended_at: new Date().toISOString(),
+                        updated_at: new Date().toISOString()
+                      })
+                      .eq('id', session.id)
+                    
+                    if (error) {
+                      console.error('Failed to update session completion:', error)
+                    }
+                  } catch (err) {
+                    console.error('Session completion update error:', err)
+                  }
+                }
+                
+                updateSessionCompletion()
+                setCurrentPhase('completed')
+              }}
             />
           )}
           
           {currentPhase === 'completed' && session && (
-            <div className="text-center py-8">
-              <h2 className="text-2xl font-bold text-green-600 mb-4">Interview Completed!</h2>
-              <p className="text-gray-600 mb-4">
-                Thank you for completing the Excel skills assessment.
-              </p>
-              <p className="text-sm text-gray-500">Session ID: {session.id}</p>
-              <div className="mt-6">
-                <p className="text-gray-600">
-                  Your responses are being processed. The recruiter will review your performance and get back to you soon.
-                </p>
-                <button
-                  onClick={async () => {
-                    try {
-                      const response = await fetch('/api/report', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ sessionId: session.id })
-                      })
-                      if (response.ok) {
-                        console.log('Report generated successfully')
-                      }
-                    } catch (error) {
-                      console.error('Report generation failed:', error)
-                    }
-                  }}
-                  className="mt-4 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md"
-                >
-                  Generate Report
-                </button>
-              </div>
-            </div>
+            <CompletionSummary sessionId={session.id} />
           )}
         </div>
       </div>

@@ -27,7 +27,17 @@ export async function POST(request: NextRequest) {
       // Generate a new interview question
       const { questionNumber = 1, difficulty = 'intermediate' } = body
       
-      const question = await generateInterviewQuestion(questionNumber, difficulty)
+      // Get previously asked questions to avoid duplicates
+      const { data: previousQuestions, error: queryError } = await supabase
+        .from('interview_events')
+        .select('content')
+        .eq('session_id', sessionId)
+        .eq('event_type', 'question')
+        .order('created_at', { ascending: true })
+      
+      const previousQuestionTexts = previousQuestions?.map(q => q.content) || []
+      
+      const question = await generateInterviewQuestion(questionNumber, difficulty, previousQuestionTexts)
       
       // Save question to database
       const { data, error } = await supabase
@@ -101,11 +111,22 @@ export async function POST(request: NextRequest) {
         console.error('Follow-up save error:', followupError)
       }
 
-      // Update session score
+      // Update session score - get current interview score and add new scaled score
+      // Scale from 10-point to 5-point system (Phase 1 now worth 40% = 40 points total)
+      const { data: currentSession } = await supabase
+        .from('sessions')
+        .select('interview_score')
+        .eq('id', sessionId)
+        .single()
+
+      const currentInterviewScore = currentSession?.interview_score || 0
+      const scaledScore = Math.round(result.score * 0.5) // Convert 10-point to 5-point scale
+      const newTotalInterviewScore = currentInterviewScore + scaledScore
+
       const { error: updateError } = await supabase
         .from('sessions')
         .update({
-          interview_score: result.score,
+          interview_score: newTotalInterviewScore,
           updated_at: new Date().toISOString()
         })
         .eq('id', sessionId)
@@ -116,11 +137,50 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        score: result.score,
+        score: scaledScore, // Return the scaled score (5-point system)
+        originalScore: result.score, // Keep original for reference
         reasoning: result.reasoning,
         followupQuestion: result.followupQuestion,
         scoreEventId: scoreEvent?.id,
         followupEventId: followupEvent?.id
+      })
+    }
+
+    if (action === 'complete_interview') {
+      // Save interview completion summary
+      const { totalScore = 0, questionsAnswered = 0 } = body
+      
+      // Save completion event as 'follow_up' type (allowed by schema)
+      const { data: completionEvent, error: completionError } = await supabase
+        .from('interview_events')
+        .insert({
+          session_id: sessionId,
+          event_type: 'follow_up',
+          content: `Interview phase completed. Questions answered: ${questionsAnswered}, Total score: ${totalScore}`
+        })
+        .select()
+        .single()
+
+      if (completionError) {
+        console.error('Completion save error:', completionError)
+      }
+
+      // Update session status to 'in_progress' (Phase 1 done, Phase 2 starting)
+      const { error: statusError } = await supabase
+        .from('sessions')
+        .update({
+          status: 'in_progress',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', sessionId)
+
+      if (statusError) {
+        console.error('Session status update error:', statusError)
+      }
+
+      return NextResponse.json({
+        success: true,
+        completionEventId: completionEvent?.id
       })
     }
 

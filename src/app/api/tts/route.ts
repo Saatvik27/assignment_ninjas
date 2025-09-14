@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid JSON in request' }, { status: 400 })
     }
     
-    const { text } = body
+    const { text, speechRate = 1.0 } = body
     
     if (!text || typeof text !== 'string') {
       console.error('Invalid text in TTS request:', text)
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'TTS service unavailable' }, { status: 503 })
     }
 
-    console.log('Calling Murf API with text length:', text.length)
+    console.log('Calling Murf API with text length:', text.length, 'and speech rate:', speechRate)
     // Generate speech using Murf API
     const response = await fetch('https://api.murf.ai/v1/speech/generate', {
       method: 'POST',
@@ -42,7 +42,8 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         text: text,
-        voiceId: 'en-US-natalie'
+        voiceId: 'en-US-natalie',
+        rate: speechRate  // Add speech rate control
       })
     })
 
