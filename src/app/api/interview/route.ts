@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-// import { scoreAndGenerateFollowup, generateInterviewQuestion } from '@/lib/groq' // Groq doesn't support Gemini - commented out
-import { scoreAndGenerateFollowup, generateInterviewQuestion } from '@/lib/gemini' // Back to direct Gemini
+import { scoreAndGenerateFollowup as groqScoreAndFollowup, generateInterviewQuestion as groqGenerateQuestion } from '@/lib/groq' // Groq primary
+import { scoreAndGenerateFollowup as geminiScoreAndFollowup, generateInterviewQuestion as geminiGenerateQuestion } from '@/lib/gemini' // Gemini fallback
 import { createServerSupabaseClient } from '@/lib/supabase'
 
 interface ScoringResult {
@@ -43,40 +43,65 @@ export async function POST(request: NextRequest) {
       
       const previousQuestionTexts = previousQuestions?.map(q => q.content) || []
       
-      // Try Gemini first (now with 60s timeout, no artificial limits)
-      console.log(`🤖 Attempting Gemini generation for Question ${questionNumber}...`)
+      // Try Groq first (fast and reliable), then Gemini as fallback
+      console.log(`🚀 Attempting Groq (Llama) generation for Question ${questionNumber}...`)
+      
+      let questionGenerated = false
+      let generatedQuestion = ''
       
       try {
-        const geminiQuestion = await generateInterviewQuestion(questionNumber, difficulty, previousQuestionTexts)
+        const groqQuestion = await groqGenerateQuestion(questionNumber, difficulty)
         
-        if (geminiQuestion && geminiQuestion.trim()) {
-          console.log(`✅ Gemini success! Generated Question ${questionNumber}:`, geminiQuestion.substring(0, 100) + '...')
-          
-          // Save Gemini question to database
-          const { data, error } = await supabase
-            .from('interview_events')
-            .insert({
-              session_id: sessionId,
-              event_type: 'question',
-              content: geminiQuestion
-            })
-            .select()
-            .single()
-
-          if (error) {
-            console.error('Database error saving Gemini question:', error)
-          } else {
-            return NextResponse.json({
-              success: true,
-              question: geminiQuestion,
-              eventId: data.id,
-              source: 'gemini'
-            })
-          }
+        if (groqQuestion && groqQuestion.trim()) {
+          console.log(`✅ Groq success! Generated Question ${questionNumber}:`, groqQuestion.substring(0, 100) + '...')
+          generatedQuestion = groqQuestion
+          questionGenerated = true
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-        console.error(`❌ Gemini failed for Question ${questionNumber}:`, errorMessage)
+        console.error(`❌ Groq failed for Question ${questionNumber}:`, errorMessage)
+      }
+      
+      // Fallback to Gemini if Groq fails
+      if (!questionGenerated) {
+        console.log(`🤖 Fallback to Gemini generation for Question ${questionNumber}...`)
+        
+        try {
+          const geminiQuestion = await geminiGenerateQuestion(questionNumber, difficulty, previousQuestionTexts)
+          
+          if (geminiQuestion && geminiQuestion.trim()) {
+            console.log(`✅ Gemini fallback success! Generated Question ${questionNumber}:`, geminiQuestion.substring(0, 100) + '...')
+            generatedQuestion = geminiQuestion
+            questionGenerated = true
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+          console.error(`❌ Gemini also failed for Question ${questionNumber}:`, errorMessage)
+        }
+      }
+      
+      // Save AI-generated question to database
+      if (questionGenerated) {
+        const { data, error } = await supabase
+          .from('interview_events')
+          .insert({
+            session_id: sessionId,
+            event_type: 'question',
+            content: generatedQuestion
+          })
+          .select()
+          .single()
+
+        if (error) {
+          console.error('Database error saving AI question:', error)
+        } else {
+          return NextResponse.json({
+            success: true,
+            question: generatedQuestion,
+            eventId: data.id,
+            source: questionGenerated ? 'ai' : 'fallback'
+          })
+        }
       }
       
       // Fallback questions (only if Gemini fails)
@@ -165,54 +190,55 @@ export async function POST(request: NextRequest) {
         ?.map(event => `${event.event_type}: ${event.content || event.transcript}`)
         .join('\n') || ''
 
-      // Immediate fallback result to avoid timeout
-      const fallbackResult: ScoringResult = {
-        score: 3, // Default middle score
+      // Try Groq first for scoring, then Gemini as fallback
+      console.log(`🚀 Attempting Groq (Llama) scoring...`)
+      
+      let scoringResult: ScoringResult | null = null
+      
+      try {
+        const groqResult = await groqScoreAndFollowup(transcript, questionContext, conversationHistory)
+        
+        if (groqResult && groqResult.score !== undefined) {
+          console.log(`✅ Groq scoring success! Score: ${groqResult.score}`)
+          scoringResult = groqResult
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        console.error(`❌ Groq scoring failed:`, errorMessage)
+      }
+      
+      // Fallback to Gemini if Groq fails
+      if (!scoringResult) {
+        console.log(`🤖 Fallback to Gemini scoring...`)
+        
+        try {
+          const geminiResult = await geminiScoreAndFollowup(transcript, questionContext, conversationHistory)
+          
+          if (geminiResult && geminiResult.score !== undefined) {
+            console.log(`✅ Gemini scoring success! Score: ${geminiResult.score}`)
+            scoringResult = geminiResult
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+          console.error(`❌ Gemini scoring also failed:`, errorMessage)
+        }
+      }
+      
+      // Use AI result or fallback
+      const finalResult = scoringResult || {
+        score: 3,
         reasoning: 'Answer received and is being analyzed. Thank you for your response.',
         followupQuestion: 'Let\'s continue with the next question.'
       }
 
-      console.log('Using fallback scoring to avoid timeout')
-
-      // Start Gemini scoring in background (don't await)
-      scoreAndGenerateFollowup(transcript, questionContext, conversationHistory)
-        .then(async (geminiResult) => {
-          if (geminiResult && geminiResult.score !== undefined) {
-            console.log('Gemini provided better scoring, updating database...')
-            // Update the events with better scoring
-            await supabase
-              .from('interview_events')
-              .update({ 
-                content: geminiResult.reasoning,
-                score: geminiResult.score
-              })
-              .eq('session_id', sessionId)
-              .eq('event_type', 'score')
-              .order('created_at', { ascending: false })
-              .limit(1)
-
-            // Update follow-up question too
-            await supabase
-              .from('interview_events')
-              .update({ content: geminiResult.followupQuestion })
-              .eq('session_id', sessionId)
-              .eq('event_type', 'follow_up')
-              .order('created_at', { ascending: false })
-              .limit(1)
-          }
-        })
-        .catch((error) => {
-          console.log('Background Gemini scoring failed (this is fine):', error.message)
-        })
-
-      // Save fallback score and follow-up question immediately
+      // Save score and follow-up question 
       const { data: scoreEvent, error: scoreError } = await supabase
         .from('interview_events')
         .insert({
           session_id: sessionId,
           event_type: 'score',
-          content: fallbackResult.reasoning,
-          score: fallbackResult.score
+          content: finalResult.reasoning,
+          score: finalResult.score
         })
         .select()
         .single()
@@ -226,7 +252,7 @@ export async function POST(request: NextRequest) {
         .insert({
           session_id: sessionId,
           event_type: 'follow_up',
-          content: fallbackResult.followupQuestion
+          content: finalResult.followupQuestion
         })
         .select()
         .single()
@@ -244,7 +270,7 @@ export async function POST(request: NextRequest) {
         .single()
 
       const currentInterviewScore = currentSession?.interview_score || 0
-      const scaledScore = Math.round(fallbackResult.score * 0.5) // Convert 10-point to 5-point scale
+      const scaledScore = Math.round(finalResult.score * 0.5) // Convert 10-point to 5-point scale
       const newTotalInterviewScore = currentInterviewScore + scaledScore
 
       const { error: updateError } = await supabase
@@ -262,9 +288,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         score: scaledScore, // Return the scaled score (5-point system)
-        originalScore: fallbackResult.score, // Keep original for reference
-        reasoning: fallbackResult.reasoning,
-        followupQuestion: fallbackResult.followupQuestion,
+        originalScore: finalResult.score, // Keep original for reference
+        reasoning: finalResult.reasoning,
+        followupQuestion: finalResult.followupQuestion,
         scoreEventId: scoreEvent?.id,
         followupEventId: followupEvent?.id
       })

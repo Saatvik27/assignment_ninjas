@@ -4,7 +4,11 @@ import Groq from "groq-sdk"
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
 // Fast alternative to Gemini using Groq's lightning-fast inference
-export async function generateInterviewQuestion(questionNumber: number = 1, difficulty: 'beginner' | 'intermediate' | 'advanced' = 'intermediate'): Promise<string> {
+export async function generateInterviewQuestion(
+  questionNumber: number = 1, 
+  difficulty: 'beginner' | 'intermediate' | 'advanced' = 'intermediate',
+  previousQuestions: string[] = []
+): Promise<string> {
   try {
     const chatCompletion = await groq.chat.completions.create({
       messages: [
@@ -16,15 +20,18 @@ export async function generateInterviewQuestion(questionNumber: number = 1, diff
           role: "user",
           content: `This is question #${questionNumber} in the interview sequence.
 
-Generate ONE specific, practical Excel interview question that tests real-world skills.
+${previousQuestions.length > 0 ? `Previous questions asked:
+${previousQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}
+
+` : ''}Generate ONE specific, practical Excel interview question that tests real-world skills.
 
 Requirements:
 - Focus on Excel functions, formulas, or data analysis
 - Should be answerable in 2-3 minutes
 - For ${difficulty} level: ${getDifficultyGuidelines(difficulty)}
 - Make it progressively challenging based on question number
-
-Return only the question text, no extra formatting.`
+- AVOID asking similar questions to those already asked above
+- Return only the question text, no extra formatting.`
         }
       ],
       model: "llama-3.1-8b-instant", // Fast Groq model that's currently available
