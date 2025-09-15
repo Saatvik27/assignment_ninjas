@@ -35,11 +35,11 @@ export default function ScreenRecording({ sessionId, screenStream, isActive }: S
     try {
       chunksRef.current = []
       
-      // Ultra-compressed settings for 2MB target file size
+      // Ultra-compressed settings for minimal file size (~1MB target)
       const mediaRecorder = new MediaRecorder(screenStream, {
         mimeType: 'video/webm;codecs=vp8,opus',
-        videoBitsPerSecond: 50000,   // 50 Kbps - very compressed but still readable
-        audioBitsPerSecond: 32000    // 32 kbps audio
+        videoBitsPerSecond: 100000,  // 100 Kbps - very low but still functional
+        audioBitsPerSecond: 16000    // 16 kbps audio - minimal but audible
       })
 
       mediaRecorderRef.current = mediaRecorder
@@ -57,8 +57,8 @@ export default function ScreenRecording({ sessionId, screenStream, isActive }: S
         }
       }
 
-      // Collect data every 10 seconds (optimized for performance)
-      mediaRecorder.start(10000)
+      // Collect data every 15 seconds (larger chunks, smaller total file)
+      mediaRecorder.start(15000)
       setIsRecording(true)
 
     } catch (error) {

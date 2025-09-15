@@ -58,8 +58,7 @@ export async function POST(request: NextRequest) {
             .insert({
               session_id: sessionId,
               event_type: 'question',
-              content: geminiQuestion,
-              metadata: { difficulty, source: 'gemini', questionNumber }
+              content: geminiQuestion
             })
             .select()
             .single()
@@ -109,8 +108,7 @@ export async function POST(request: NextRequest) {
         .insert({
           session_id: sessionId,
           event_type: 'question',
-          content: fallbackQuestion,
-          metadata: { difficulty, source: 'fallback', questionNumber }
+          content: fallbackQuestion
         })
         .select()
         .single()

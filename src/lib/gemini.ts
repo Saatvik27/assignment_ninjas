@@ -61,7 +61,7 @@ Return only the theoretical question text, no extra formatting.`
     // Allow Gemini to take its time - no timeout restrictions
     const response = await makeGeminiRequest(async (client) => {
       return await client.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: "gemini-2.5-flash",
         contents: prompt,
       })
     }) as any
@@ -131,7 +131,7 @@ Respond in JSON format:
 
     const response = await makeGeminiRequest(async (client) => {
       return await client.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: "gemini-2.5-flash",
         contents: prompt,
       })
     })
