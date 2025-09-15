@@ -7,8 +7,22 @@ function evaluateExcelFormula(userFormula: string, expectedFormula: string, task
   score: number,
   feedback: string
 } {
-  const cleanUserFormula = userFormula.replace(/^=/, '').trim().toUpperCase()
-  const cleanExpectedFormula = expectedFormula.toUpperCase()
+  // Normalize both formulas for comparison
+  const normalizeFormula = (formula: string): string => {
+    return formula
+      .replace(/^=/, '') // Remove leading =
+      .trim() // Remove leading/trailing spaces
+      .toUpperCase() // Convert to uppercase
+      .replace(/\s+/g, '') // Remove ALL whitespace
+  }
+  
+  const cleanUserFormula = normalizeFormula(userFormula)
+  const cleanExpectedFormula = normalizeFormula(expectedFormula)
+  
+  console.log('Formula comparison:')
+  console.log('User formula (normalized):', cleanUserFormula)
+  console.log('Expected formula (normalized):', cleanExpectedFormula)
+  console.log('Match:', cleanUserFormula === cleanExpectedFormula)
   
   // Exact match - full points (30)
   if (cleanUserFormula === cleanExpectedFormula) {
@@ -136,14 +150,20 @@ export async function POST(request: NextRequest) {
     }
     
     if (action === 'evaluate_formula') {
-      const { sessionId, taskId, userFormula, expectedFormula, taskDescription, cellReference } = body
+      const { sessionId, taskId, userFormula, expectedFormula, taskDescription, cellReference, timeUp } = body
       
       if (!sessionId || !userFormula) {
         return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
       }
       
       // Evaluate the formula
-      const evaluation = evaluateExcelFormula(userFormula, expectedFormula, taskDescription)
+      let evaluation = evaluateExcelFormula(userFormula, expectedFormula, taskDescription)
+      
+      // If time was up, add a note to the feedback
+      if (timeUp) {
+        evaluation.feedback += ' ⏰ (Time expired - partial credit given)'
+        console.log(`Task completed due to time up: Score ${evaluation.score}`)
+      }
       
       const supabase = createServerSupabaseClient()
 

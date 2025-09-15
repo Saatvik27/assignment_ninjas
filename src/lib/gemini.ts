@@ -8,8 +8,26 @@ export async function generateInterviewQuestion(
   previousQuestions: string[] = []
 ): Promise<string> {
   try {
-    const previousQuestionsText = previousQuestions.length > 0 
-      ? `\n\nPreviously asked questions (DO NOT repeat these):\n${previousQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
+    // Create a comprehensive list of all previously asked or skipped questions
+    const allPreviousQuestions = previousQuestions.filter(q => q && q.trim().length > 0)
+    
+    // Extract key topics from previous questions to avoid repetition
+    const usedTopics = new Set<string>()
+    allPreviousQuestions.forEach(question => {
+      const lowerQ = question.toLowerCase()
+      // Extract key Excel terms to avoid topic repetition
+      const topics = [
+        'vlookup', 'hlookup', 'index', 'match', 'pivot', 'table', 'chart', 'formula', 
+        'function', 'reference', 'cell', 'conditional', 'formatting', 'validation',
+        'macro', 'vba', 'array', 'circular', 'performance', 'filter', 'sort'
+      ]
+      topics.forEach(topic => {
+        if (lowerQ.includes(topic)) usedTopics.add(topic)
+      })
+    })
+
+    const previousQuestionsText = allPreviousQuestions.length > 0 
+      ? `\n\nPREVIOUSLY ASKED OR SKIPPED QUESTIONS (NEVER repeat these topics or ask similar questions):\n${allPreviousQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}\n\nUSED TOPICS TO AVOID: ${Array.from(usedTopics).join(', ')}`
       : ''
     
     const prompt = `You are an Excel expert creating theoretical interview questions for a ${difficulty} level candidate.
@@ -18,24 +36,25 @@ This is question #${questionNumber} in the interview sequence.
 
 Generate ONE theoretical Excel interview question that tests conceptual knowledge and understanding.
 
-Requirements:
-- Focus on THEORETICAL concepts, not practical scenarios
+CRITICAL REQUIREMENTS:
+- MUST be completely different from all previously asked questions
+- Focus on THEORETICAL concepts, not practical scenarios  
 - Ask about Excel functions, features, or concepts directly
 - Questions should be answerable with explanations, not step-by-step instructions
 - For ${difficulty} level: ${getDifficultyGuidelines(difficulty)}
-- MUST be different from any previously asked questions
-- Examples of good theoretical questions:
-  * "What is the difference between VLOOKUP and INDEX-MATCH functions?"
-  * "Explain how Excel handles circular references"
-  * "What are the advantages of using PivotTables over regular data tables?"
-  * "How does Excel's order of operations work in formulas?"
+- NEVER repeat topics already covered in previous questions
 
-Avoid:
-- Detailed scenarios or case studies
-- Multi-step practical problems
-- Worksheet setups or specific business contexts
-- Questions requiring formula writing
-- Repeating any previously asked questions${previousQuestionsText}
+Examples of good theoretical questions:
+* "What is the difference between VLOOKUP and INDEX-MATCH functions?"
+* "Explain how Excel handles circular references"
+* "What are the advantages of using PivotTables over regular data tables?"
+* "How does Excel's order of operations work in formulas?"
+
+STRICT AVOIDANCE RULES:
+- Do NOT ask about topics already covered
+- Do NOT use similar wording to previous questions
+- Do NOT repeat any Excel function or feature already discussed
+- Choose completely different Excel areas/topics${previousQuestionsText}
 
 Return only the theoretical question text, no extra formatting.`
 
@@ -47,12 +66,37 @@ Return only the theoretical question text, no extra formatting.`
     })
     
     const text = response.text || ''
+    const cleanQuestion = text.trim()
     
-    return text.trim() || 'What is the difference between VLOOKUP and INDEX-MATCH functions in Excel?'
+    // Additional validation to prevent similar questions
+    if (allPreviousQuestions.length > 0) {
+      const isToSimilar = allPreviousQuestions.some(prev => {
+        const similarity = calculateSimilarity(prev.toLowerCase(), cleanQuestion.toLowerCase())
+        return similarity > 0.4 // Stricter similarity check
+      })
+      
+      if (isToSimilar) {
+        console.log('Generated question too similar, using fallback')
+        return getFallbackQuestion(difficulty, questionNumber)
+      }
+    }
+    
+    return cleanQuestion || getFallbackQuestion(difficulty, questionNumber)
   } catch (error) {
     console.error('Gemini question generation error:', error)
     return getFallbackQuestion(difficulty, questionNumber)
   }
+}
+
+// Helper function to calculate similarity between two strings (improved)
+function calculateSimilarity(str1: string, str2: string): number {
+  const words1 = str1.split(' ').filter(word => word.length > 3)
+  const words2 = str2.split(' ').filter(word => word.length > 3)
+  
+  if (words1.length === 0 || words2.length === 0) return 0
+  
+  const commonWords = words1.filter(word => words2.includes(word))
+  return commonWords.length / Math.max(words1.length, words2.length)
 }
 
 export async function scoreAndGenerateFollowup(

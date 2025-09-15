@@ -29,6 +29,7 @@ export default function InterviewPage() {
   const [introductionComplete, setIntroductionComplete] = useState(false)
   const [showVoiceInstructions, setShowVoiceInstructions] = useState(false)
   const [firstQuestion, setFirstQuestion] = useState<string>('')
+  const [isFullscreen, setIsFullscreen] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
@@ -99,8 +100,9 @@ export default function InterviewPage() {
       screenStreamRef.current = screenStream
       setPermissions(prev => ({ ...prev, screen: true }))
       
-      // Start monitoring for tab switches and focus changes - DISABLED FOR PERFORMANCE
-      // startScreenMonitoring()
+      // Start monitoring for tab switches and focus changes - RE-ENABLED with fullscreen
+      // Note: This is now enabled since we have fullscreen mode active
+      // startScreenMonitoring() will be called after fullscreen is activated in startInterview()
 
     } catch (error) {
       console.error('Permission request failed:', error)
@@ -110,7 +112,7 @@ export default function InterviewPage() {
     }
   }
 
-  const logScreenShareEvent = async (eventType: string) => {
+  const logScreenShareEvent = async (eventType: string, additionalData?: any) => {
     if (!session?.id) return
 
     try {
@@ -125,7 +127,8 @@ export default function InterviewPage() {
           confidence: 1.0,
           metadata: {
             timestamp: new Date().toISOString(),
-            source: 'screen_monitoring'
+            source: 'screen_monitoring',
+            ...additionalData
           }
         }),
       })
@@ -195,6 +198,20 @@ export default function InterviewPage() {
     setIsLoading(true)
     
     try {
+      // Request fullscreen mode before starting interview
+      try {
+        await document.documentElement.requestFullscreen()
+        console.log('Entered fullscreen mode')
+      } catch (fullscreenError) {
+        console.warn('Fullscreen request failed:', fullscreenError)
+        // Don't block interview if fullscreen fails, but warn user
+        const proceedAnyway = confirm('Fullscreen mode could not be activated. This may affect the interview experience. Do you want to proceed anyway?')
+        if (!proceedAnyway) {
+          setIsLoading(false)
+          return
+        }
+      }
+      
       console.log('Creating session for:', candidateName, candidateEmail)
       const { data, error } = await supabase
         .from('sessions')
@@ -214,6 +231,9 @@ export default function InterviewPage() {
       console.log('Session created:', data)
       setSession(data)
       setCurrentPhase('intro_audio')
+      
+      // Enable proctoring monitoring after fullscreen is active
+      startScreenMonitoring()
       
       // Play AI introduction with the session data directly
       await playIntroduction(data)
@@ -331,6 +351,140 @@ export default function InterviewPage() {
     }
   }, [currentPhase, permissions.camera])
 
+  // Monitor fullscreen status changes and comprehensive proctoring
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isCurrentlyFullscreen = !!document.fullscreenElement
+      setIsFullscreen(isCurrentlyFullscreen)
+      
+      if (!isCurrentlyFullscreen) {
+        console.log('User exited fullscreen')
+        if (session) {
+          logScreenShareEvent('fullscreen_exit')
+        }
+        
+        // Show warning to user about fullscreen exit
+        if (currentPhase === 'voice_interview' || currentPhase === 'excel_task') {
+          alert('⚠️ You have exited fullscreen mode. Please press F11 or click the "Enter" button to re-enter fullscreen mode for the interview.')
+        }
+      } else {
+        console.log('User entered fullscreen mode')
+      }
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // F11 key for fullscreen toggle
+      if (event.key === 'F11' && (currentPhase === 'voice_interview' || currentPhase === 'excel_task')) {
+        event.preventDefault()
+        if (document.fullscreenElement) {
+          document.exitFullscreen()
+        } else {
+          document.documentElement.requestFullscreen()
+        }
+      }
+
+      // Enhanced proctoring: Log suspicious key combinations
+      if (currentPhase === 'voice_interview' || currentPhase === 'excel_task') {
+        const suspiciousKeys = [
+          { condition: event.altKey && event.key === 'Tab', name: 'Alt+Tab' },
+          { condition: event.ctrlKey && event.key === 'Tab', name: 'Ctrl+Tab' },
+          { condition: event.ctrlKey && event.shiftKey && event.key === 'Tab', name: 'Ctrl+Shift+Tab' },
+          { condition: event.ctrlKey && event.key === 't', name: 'Ctrl+T (New Tab)' },
+          { condition: event.ctrlKey && event.key === 'n', name: 'Ctrl+N (New Window)' },
+          { condition: event.ctrlKey && event.key === 'w', name: 'Ctrl+W (Close Tab)' },
+          { condition: event.metaKey && event.key === 'Tab', name: 'Cmd+Tab' }, // Mac
+          { condition: event.metaKey && event.key === '`', name: 'Cmd+` (App Switcher)' } // Mac
+        ]
+
+        suspiciousKeys.forEach(({ condition, name }) => {
+          if (condition) {
+            console.warn(`Suspicious key combination detected: ${name}`)
+            if (session) {
+              logScreenShareEvent('suspicious_key_combo', { key_combination: name })
+            }
+          }
+        })
+      }
+    }
+
+      // Enhanced proctoring: Tab switching detection
+    const handleVisibilityChange = () => {
+      if (currentPhase === 'voice_interview' || currentPhase === 'excel_task') {
+        if (document.visibilityState === 'hidden') {
+          // Critical security log - keep this
+          console.warn('Tab switched or window minimized during interview')
+          if (session) {
+            logScreenShareEvent('tab_switch_away')
+          }
+        } else if (document.visibilityState === 'visible') {
+          // Removed non-critical log for performance
+          if (session) {
+            logScreenShareEvent('tab_switch_back')
+          }
+        }
+      }
+    }
+
+    // Enhanced proctoring: Window focus monitoring
+    const handleWindowBlur = () => {
+      if (currentPhase === 'voice_interview' || currentPhase === 'excel_task') {
+        // Critical security log - keep this
+        console.warn('Interview window lost focus')
+        if (session) {
+          logScreenShareEvent('window_blur')
+        }
+      }
+    }
+
+    const handleWindowFocus = () => {
+      if (currentPhase === 'voice_interview' || currentPhase === 'excel_task') {
+        // Removed non-critical log for performance
+        if (session) {
+          logScreenShareEvent('window_focus')
+        }
+      }
+    }
+
+    // Enhanced proctoring: Mouse leave detection (user moved to another screen/app)
+    const handleMouseLeave = () => {
+      if (currentPhase === 'voice_interview' || currentPhase === 'excel_task') {
+        // Reduced logging for performance - only log to database
+        if (session) {
+          logScreenShareEvent('mouse_leave')
+        }
+      }
+    }
+
+    const handleMouseEnter = () => {
+      if (currentPhase === 'voice_interview' || currentPhase === 'excel_task') {
+        // Removed non-critical log for performance
+        if (session) {
+          logScreenShareEvent('mouse_enter')
+        }
+      }
+    }    // Add all event listeners for comprehensive proctoring
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('blur', handleWindowBlur)
+    window.addEventListener('focus', handleWindowFocus)
+    document.addEventListener('mouseleave', handleMouseLeave)
+    document.addEventListener('mouseenter', handleMouseEnter)
+    
+    // Set initial state
+    setIsFullscreen(!!document.fullscreenElement)
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange)
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('blur', handleWindowBlur)
+      window.removeEventListener('focus', handleWindowFocus)
+      document.removeEventListener('mouseleave', handleMouseLeave)
+      document.removeEventListener('mouseenter', handleMouseEnter)
+    }
+  }, [currentPhase, session])
+
   if (currentPhase === 'setup') {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -416,13 +570,29 @@ export default function InterviewPage() {
                 {isLoading ? 'Requesting Permissions...' : 'Grant Media Permissions'}
               </button>
             ) : (
-              <button
-                onClick={startInterview}
-                disabled={isLoading || !candidateName.trim() || !candidateEmail.trim()}
-                className="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoading ? 'Starting Interview...' : 'Start Interview'}
-              </button>
+              <>
+                {/* Fullscreen Notice */}
+                <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-3">
+                  <div className="flex items-start">
+                    <div className="text-blue-600 mr-2">📺</div>
+                    <div>
+                      <h4 className="text-sm font-medium text-blue-900">Fullscreen Mode</h4>
+                      <p className="text-xs text-blue-700 mt-1">
+                        The interview will automatically enter fullscreen mode for security. 
+                        You can press F11 or use the interface button if you exit fullscreen during the interview.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
+                <button
+                  onClick={startInterview}
+                  disabled={isLoading || !candidateName.trim() || !candidateEmail.trim()}
+                  className="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? 'Starting Interview...' : 'Start Interview'}
+                </button>
+              </>
             )}
             
             {/* Testing Shortcut - Remove in production */}
@@ -514,6 +684,36 @@ export default function InterviewPage() {
               }}
             />
             
+            {/* Fullscreen Status Indicator */}
+            {(currentPhase === 'voice_interview' || currentPhase === 'excel_task') && (
+              <div className="absolute top-2 right-2">
+                <div className={`flex items-center space-x-2 px-2 py-1 rounded-full text-xs font-medium ${
+                  isFullscreen 
+                    ? 'bg-green-100 text-green-800 border border-green-200' 
+                    : 'bg-red-100 text-red-800 border border-red-200'
+                }`}>
+                  <div className={`w-2 h-2 rounded-full ${
+                    isFullscreen ? 'bg-green-500' : 'bg-red-500 animate-pulse'
+                  }`}></div>
+                  <span>{isFullscreen ? 'Fullscreen' : 'Not Fullscreen'}</span>
+                  {!isFullscreen && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await document.documentElement.requestFullscreen()
+                        } catch (error) {
+                          alert('Please press F11 to enter fullscreen mode')
+                        }
+                      }}
+                      className="ml-1 px-2 py-0.5 bg-red-600 text-white rounded text-xs hover:bg-red-700"
+                    >
+                      Enter
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            
             {/* Proctoring components - DISABLED FOR PERFORMANCE */}
             {/* 
             <FaceDetection 
@@ -523,14 +723,14 @@ export default function InterviewPage() {
             />
             */}
             
-            {/* Screen Recording - DISABLED FOR PERFORMANCE */}
-            {/*
+            {/* Screen Recording - ENABLED with Performance Optimizations */}
             <ScreenRecording
               sessionId={session?.id || ''}
               screenStream={screenStreamRef.current}
               isActive={currentPhase === 'voice_interview' || currentPhase === 'excel_task'}
             />
-            */}
+
+            {/* Note: Audio recording is handled by TimedAudioRecorder inside VoiceInterview component */}
           </div>
 
           {/* Phase-specific content */}

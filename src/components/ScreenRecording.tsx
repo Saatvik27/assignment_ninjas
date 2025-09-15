@@ -35,8 +35,11 @@ export default function ScreenRecording({ sessionId, screenStream, isActive }: S
     try {
       chunksRef.current = []
       
+      // Ultra-compressed settings for 2MB target file size
       const mediaRecorder = new MediaRecorder(screenStream, {
-        mimeType: 'video/webm;codecs=vp8,opus'
+        mimeType: 'video/webm;codecs=vp8,opus',
+        videoBitsPerSecond: 50000,   // 50 Kbps - very compressed but still readable
+        audioBitsPerSecond: 32000    // 32 kbps audio
       })
 
       mediaRecorderRef.current = mediaRecorder
@@ -54,7 +57,8 @@ export default function ScreenRecording({ sessionId, screenStream, isActive }: S
         }
       }
 
-      mediaRecorder.start(5000) // Collect data every 5 seconds
+      // Collect data every 10 seconds (optimized for performance)
+      mediaRecorder.start(10000)
       setIsRecording(true)
 
     } catch (error) {
@@ -77,36 +81,61 @@ export default function ScreenRecording({ sessionId, screenStream, isActive }: S
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
       const fileName = `screen-recording-${sessionId}-${timestamp}.webm`
 
-      // Upload to Supabase Storage
-      const { data, error } = await supabase.storage
-        .from('recordings')
-        .upload(`sessions/${sessionId}/${fileName}`, recordingBlob, {
-          contentType: 'video/webm',
-          upsert: false
-        })
+      // Performance optimization: Don't block UI for large uploads
+      console.log(`Uploading screen recording: ${(recordingBlob.size / 1024 / 1024).toFixed(2)}MB`)
 
-      if (error) {
-        console.error('Failed to upload recording:', error)
-        return
+      // Upload to Supabase Storage with retry logic
+      const uploadWithRetry = async (retries = 3): Promise<any> => {
+        for (let i = 0; i < retries; i++) {
+          try {
+            const { data, error } = await supabase.storage
+              .from('recordings')
+              .upload(`sessions/${sessionId}/${fileName}`, recordingBlob, {
+                contentType: 'video/webm',
+                upsert: false
+              })
+
+            if (error) throw error
+            return { data, error: null }
+          } catch (error) {
+            console.warn(`Upload attempt ${i + 1} failed:`, error)
+            if (i === retries - 1) throw error
+            // Wait before retry (exponential backoff)
+            await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000))
+          }
+        }
       }
 
-      // Log recording metadata in database
-      const { error: dbError } = await supabase
+      const { data } = await uploadWithRetry()
+
+      // Log recording metadata in database (non-blocking)
+      const duration = Math.floor(recordingSize / (recordingBlob.size / 60)) // Rough estimate
+      
+      supabase
         .from('recordings')
         .insert({
           session_id: sessionId,
           recording_type: 'screen',
           file_path: data.path,
           file_size: recordingBlob.size,
-          duration_seconds: Math.floor(recordingSize / (recordingBlob.size / 60)) // Rough estimate
+          duration_seconds: duration || 60 // Default estimate
+        })
+        .then(({ error: dbError }) => {
+          if (dbError) {
+            console.error('Failed to log recording metadata:', dbError)
+          } else {
+            console.log('Screen recording saved successfully')
+          }
         })
 
-      if (dbError) {
-        console.error('Failed to log recording metadata:', dbError)
-      }
+      // Clear chunks to free memory
+      chunksRef.current = []
+      setRecordingSize(0)
 
     } catch (error) {
       console.error('Error saving recording:', error)
+      // Don't fail silently - this is important data
+      alert('Warning: Screen recording failed to save. Please ensure stable internet connection.')
     }
   }
 

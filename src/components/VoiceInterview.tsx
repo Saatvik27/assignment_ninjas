@@ -353,6 +353,25 @@ export default function VoiceInterview({ sessionId, onPhaseComplete, shouldStart
       return
     }
     
+    try {
+      // Save the skipped question to prevent it from being asked again
+      if (currentQuestion) {
+        console.log('Saving skipped question to conversation history')
+        await fetch('/api/interview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            action: 'score_answer',
+            transcript: 'QUESTION_SKIPPED',
+            questionContext: currentQuestion,
+          })
+        })
+      }
+    } catch (error) {
+      console.error('Error saving skipped question:', error)
+    }
+    
     // Reset current answer and processing states
     setCurrentAnswer(null)
     setIsScoring(false)

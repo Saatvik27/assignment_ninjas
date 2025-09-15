@@ -65,7 +65,14 @@ CREATE TABLE ai_excel_tasks (
 CREATE TABLE proctoring_events (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   session_id uuid REFERENCES sessions(id) ON DELETE CASCADE,
-  event_type TEXT CHECK (event_type IN ('face_detected', 'face_lost', 'tab_switch', 'window_blur', 'fullscreen_exit')),
+  event_type TEXT CHECK (event_type IN (
+    'face_detected', 'face_lost',
+    'tab_switch', 'tab_switch_away', 'tab_switch_back', 'tab_return',
+    'window_blur', 'window_focus', 
+    'fullscreen_exit', 'screen_share_stopped',
+    'suspicious_key_combo', 'mouse_leave', 'mouse_enter',
+    'audio_transcript'
+  )),
   confidence FLOAT,
   metadata JSONB,
   timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()

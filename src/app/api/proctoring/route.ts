@@ -16,12 +16,32 @@ export async function POST(request: NextRequest) {
     const { sessionId, eventType, confidence, metadata } = body
 
     if (!sessionId || !eventType) {
+      console.error('Missing required fields:', { sessionId: !!sessionId, eventType: !!eventType })
       return NextResponse.json({ error: 'Session ID and event type are required' }, { status: 400 })
     }
 
-    const validEventTypes = ['face_detected', 'face_lost', 'tab_switch', 'window_blur', 'fullscreen_exit']
+    // Log the event for debugging (remove in production)
+    console.log(`Proctoring event: ${eventType} for session ${sessionId}`, metadata || {})
+
+    const validEventTypes = [
+      // Face detection events
+      'face_detected', 'face_lost',
+      // Tab and window focus events  
+      'tab_switch', 'tab_switch_away', 'tab_switch_back', 'tab_return',
+      'window_blur', 'window_focus',
+      // Screen and fullscreen events
+      'fullscreen_exit', 'screen_share_stopped',
+      // Security and proctoring events
+      'suspicious_key_combo', 'mouse_leave', 'mouse_enter',
+      // Audio events
+      'audio_transcript'
+    ]
     if (!validEventTypes.includes(eventType)) {
-      return NextResponse.json({ error: 'Invalid event type' }, { status: 400 })
+      console.error(`Invalid event type received: "${eventType}". Valid types:`, validEventTypes)
+      return NextResponse.json({ 
+        error: `Invalid event type: ${eventType}`, 
+        validTypes: validEventTypes 
+      }, { status: 400 })
     }
 
     const supabase = createServerSupabaseClient()

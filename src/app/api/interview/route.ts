@@ -68,6 +68,28 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Transcript and question context are required' }, { status: 400 })
       }
 
+      // Handle skipped questions
+      if (transcript === 'QUESTION_SKIPPED') {
+        console.log('Processing skipped question, saving to conversation history')
+        
+        // Save the skipped question event
+        await supabase
+          .from('interview_events')
+          .insert({
+            session_id: sessionId,
+            event_type: 'answer',
+            content: questionContext,
+            transcript: 'SKIPPED',
+            score: 0
+          })
+
+        return NextResponse.json({
+          success: true,
+          skipped: true,
+          message: 'Question skipped successfully'
+        })
+      }
+
       // Get previous conversation for context
       const { data: previousEvents } = await supabase
         .from('interview_events')

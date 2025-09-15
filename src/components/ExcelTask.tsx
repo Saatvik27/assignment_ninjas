@@ -52,18 +52,16 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
     }
   }, [])
 
-  // Timer effect
+  // Timer effect - only start when instructions are dismissed
   useEffect(() => {
-    if (currentTask && !isTimeUp) {
+    if (currentTask && !isTimeUp && !showInstructions) {
       const interval = setInterval(() => {
         setTimeRemaining(prev => {
           if (prev <= 1) {
             setIsTimeUp(true)
             clearInterval(interval)
-            // Auto-submit when time is up
-            if (!isEvaluating) {
-              evaluateFormula()
-            }
+            // Auto-submit when time is up and move to completion
+            handleTimeUp()
             return 0
           }
           return prev - 1
@@ -76,14 +74,59 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
         clearInterval(interval)
       }
     }
-  }, [currentTask, isTimeUp])
+  }, [currentTask, isTimeUp, showInstructions])
+
+  // Handle time up scenario
+  const handleTimeUp = async () => {
+    console.log('Time is up for Excel task!', `Task ${taskIndex + 1} of ${totalTasks}`)
+    
+    // Save current progress if there's a formula entered
+    if (userFormula.trim() && currentTask) {
+      try {
+        await fetch('/api/excel-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'evaluate_formula',
+            sessionId,
+            taskId: currentTask.id,
+            userFormula: userFormula.trim(),
+            expectedFormula: currentTask.expectedFormula,
+            expectedResult: currentTask.expectedResult,
+            taskDescription: currentTask.description,
+            timeUp: true // Flag to indicate time ran out
+          })
+        })
+        console.log('Time-up progress saved successfully')
+      } catch (error) {
+        console.error('Error saving progress when time up:', error)
+      }
+    }
+    
+    // Check if this was the last task
+    if (taskIndex >= totalTasks - 1) {
+      // This was the last task, move to completion
+      setTimeout(() => {
+        console.log('Time up on final task - moving to completion')
+        onPhaseComplete()
+      }, 2000)
+    } else {
+      // Move to next task
+      setTimeout(() => {
+        console.log('Time up - moving to next task')
+        moveToNextTask()
+      }, 2000)
+    }
+  }
 
   // Reset timer when moving to next task
   useEffect(() => {
     setTimeRemaining(10 * 60) // Reset to 10 minutes
     setIsTimeUp(false)
+    setShowInstructions(true) // Show instructions for new task
     if (timerInterval) {
       clearInterval(timerInterval)
+      setTimerInterval(null)
     }
   }, [taskIndex])
 
@@ -360,11 +403,13 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
                 <ul className="space-y-2 text-green-800">
                   <li>• You will complete <strong>2 Excel practical tasks</strong></li>
                   <li>• Each task has a <strong>10-minute time limit</strong></li>
+                  <li>• ⏰ <strong>Timer starts when you click "Start Excel Tasks"</strong></li>
                   <li>• Read the business scenario and analyze the provided data</li>
                   <li>• Enter the required formula in the designated cell</li>
                   <li>• Use <strong>"Check Formula"</strong> to test if your formula is correct</li>
                   <li>• When ready, click <strong>"Submit & Continue"</strong> to proceed</li>
                   <li>• Copy and paste functions are disabled for security</li>
+                  <li>• If time runs out, your progress will be auto-saved</li>
                 </ul>
               </div>
             </div>
@@ -396,20 +441,27 @@ export default function ExcelTask({ sessionId, onPhaseComplete }: ExcelTaskProps
             ></div>
           </div>
           
-          {/* Timer Display */}
-          <div className="mt-4 text-center">
-            <div className={`inline-flex items-center px-4 py-2 rounded-lg font-medium text-lg ${
-              timeRemaining <= 60 ? 'bg-red-100 text-red-800' : 
-              timeRemaining <= 300 ? 'bg-yellow-100 text-yellow-800' : 
-              'bg-green-100 text-green-800'
-            }`}>
-              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              Time Remaining: {formatTime(timeRemaining)}
-              {isTimeUp && <span className="ml-2 text-red-600 font-bold">TIME UP!</span>}
+          {/* Timer Display - only show when task is active */}
+          {!showInstructions && (
+            <div className="mt-4 text-center">
+              <div className={`inline-flex items-center px-4 py-2 rounded-lg font-medium text-lg ${
+                timeRemaining <= 60 ? 'bg-red-100 text-red-800' : 
+                timeRemaining <= 300 ? 'bg-yellow-100 text-yellow-800' : 
+                'bg-green-100 text-green-800'
+              }`}>
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Time Remaining: {formatTime(timeRemaining)}
+                {isTimeUp && <span className="ml-2 text-red-600 font-bold">TIME UP!</span>}
+              </div>
+              {isTimeUp && (
+                <p className="mt-2 text-red-600 font-medium">
+                  Saving your progress and moving to completion...
+                </p>
+              )}
             </div>
-          </div>
+          )}
         </div>
 
         {/* Task Description */}
