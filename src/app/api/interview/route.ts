@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     const supabase = createServerSupabaseClient()
 
     if (action === 'generate_question') {
-      // Generate a new interview question with non-blocking approach
+      // Generate a new interview question - try Gemini first, fallback if needed
       const { questionNumber = 1, difficulty = 'intermediate' } = body
       
       // Get previously asked questions to avoid duplicates
@@ -43,7 +43,45 @@ export async function POST(request: NextRequest) {
       
       const previousQuestionTexts = previousQuestions?.map(q => q.content) || []
       
-      // Immediate fallback questions (return immediately)
+      // Try Gemini first (now with 60s timeout, no artificial limits)
+      console.log(`🤖 Attempting Gemini generation for Question ${questionNumber}...`)
+      
+      try {
+        const geminiQuestion = await generateInterviewQuestion(questionNumber, difficulty, previousQuestionTexts)
+        
+        if (geminiQuestion && geminiQuestion.trim()) {
+          console.log(`✅ Gemini success! Generated Question ${questionNumber}:`, geminiQuestion.substring(0, 100) + '...')
+          
+          // Save Gemini question to database
+          const { data, error } = await supabase
+            .from('interview_events')
+            .insert({
+              session_id: sessionId,
+              event_type: 'question',
+              content: geminiQuestion,
+              metadata: { difficulty, source: 'gemini', questionNumber }
+            })
+            .select()
+            .single()
+
+          if (error) {
+            console.error('Database error saving Gemini question:', error)
+          } else {
+            return NextResponse.json({
+              success: true,
+              question: geminiQuestion,
+              eventId: data.id,
+              source: 'gemini'
+            })
+          }
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        console.error(`❌ Gemini failed for Question ${questionNumber}:`, errorMessage)
+      }
+      
+      // Fallback questions (only if Gemini fails)
+      console.log(`⚠️ Using fallback for Question ${questionNumber}`)
       const fallbackQuestions: Record<string, string[]> = {
         beginner: [
           'What is the difference between a cell and a range in Excel?',
@@ -64,49 +102,29 @@ export async function POST(request: NextRequest) {
       
       const questions = fallbackQuestions[difficulty] || fallbackQuestions.intermediate
       const fallbackQuestion = questions[Math.min(questionNumber - 1, questions.length - 1)] || questions[0]
-      
-      // Return fallback question immediately to avoid timeout
-      console.log(`Using fallback question for Question ${questionNumber}:`, fallbackQuestion)
-      
-      // Start Gemini generation in background (don't await)
-      generateInterviewQuestion(questionNumber, difficulty, previousQuestionTexts)
-        .then(async (geminiQuestion) => {
-          if (geminiQuestion && geminiQuestion !== fallbackQuestion) {
-            console.log('Gemini generated better question, updating database...')
-            // Update the question in database if Gemini provides something better
-            await supabase
-              .from('interview_events')
-              .update({ content: geminiQuestion })
-              .eq('session_id', sessionId)
-              .eq('event_type', 'question')
-              .order('created_at', { ascending: false })
-              .limit(1)
-          }
-        })
-        .catch((error) => {
-          console.log('Background Gemini generation failed (this is fine):', error.message)
-        })
-      
-      // Save fallback question to database immediately
+
+      // Save fallback question to database
       const { data, error } = await supabase
         .from('interview_events')
         .insert({
           session_id: sessionId,
           event_type: 'question',
-          content: fallbackQuestion
+          content: fallbackQuestion,
+          metadata: { difficulty, source: 'fallback', questionNumber }
         })
         .select()
         .single()
 
       if (error) {
-        console.error('Database error:', error)
+        console.error('Database error saving fallback question:', error)
         return NextResponse.json({ error: 'Failed to save question' }, { status: 500 })
       }
 
       return NextResponse.json({
         success: true,
         question: fallbackQuestion,
-        eventId: data.id
+        eventId: data.id,
+        source: 'fallback'
       })
     }
 
