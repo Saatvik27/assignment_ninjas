@@ -58,12 +58,13 @@ STRICT AVOIDANCE RULES:
 
 Return only the theoretical question text, no extra formatting.`
 
+    // Allow Gemini to take its time - no timeout restrictions
     const response = await makeGeminiRequest(async (client) => {
       return await client.models.generateContent({
         model: "gemini-2.5-pro",
         contents: prompt,
       })
-    })
+    }) as any
     
     const text = response.text || ''
     const cleanQuestion = text.trim()

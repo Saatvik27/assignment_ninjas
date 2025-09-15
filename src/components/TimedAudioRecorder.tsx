@@ -14,7 +14,30 @@ interface TimedAudioRecorderProps {
 // Check if Web Speech API is supported
 const getWebSpeechSupport = () => {
   if (typeof window === 'undefined') return false
-  return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window
+  
+  // Check HTTPS requirement
+  const isHTTPS = window.location.protocol === 'https:' || window.location.hostname === 'localhost'
+  const hasSpeechRecognition = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window
+  
+  console.log('Speech Recognition Support Check:', {
+    protocol: window.location.protocol,
+    hostname: window.location.hostname,
+    isHTTPS,
+    hasSpeechRecognition,
+    userAgent: navigator.userAgent.includes('Chrome') ? 'Chrome' : 'Other'
+  })
+  
+  if (!isHTTPS) {
+    console.warn('Speech Recognition requires HTTPS or localhost')
+    return false
+  }
+  
+  if (!hasSpeechRecognition) {
+    console.warn('Speech Recognition API not available in this browser')
+    return false
+  }
+  
+  return true
 }
 
 export default function TimedAudioRecorder({ 
@@ -163,8 +186,26 @@ export default function TimedAudioRecorder({
       
       recognition.onerror = (event: any) => {
         console.error('Speech recognition error:', event.error)
-        if (event.error === 'not-allowed') {
-          alert('Microphone access denied. Please allow microphone access and refresh.')
+        
+        // Handle different error types with user-friendly messages
+        switch (event.error) {
+          case 'not-allowed':
+            alert('🎤 Microphone access denied. Please:\n1. Click the microphone icon in your browser bar\n2. Allow microphone access\n3. Refresh the page and try again')
+            break
+          case 'no-speech':
+            console.log('No speech detected, will continue listening...')
+            break
+          case 'audio-capture':
+            alert('🎤 Microphone not found or not working. Please check your microphone connection.')
+            break
+          case 'network':
+            console.warn('Speech recognition network error, will retry...')
+            break
+          case 'service-not-allowed':
+            alert('⚠️ Speech recognition not available. This feature requires HTTPS connection.')
+            break
+          default:
+            console.warn(`Speech recognition error: ${event.error}`)
         }
       }
       
@@ -311,11 +352,23 @@ export default function TimedAudioRecorder({
   }
 
   if (!isWebSpeechSupported) {
+    const isHTTPS = typeof window !== 'undefined' && (window.location.protocol === 'https:' || window.location.hostname === 'localhost')
+    const hasAPI = typeof window !== 'undefined' && ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)
+    
     return (
       <div className="bg-red-50 border border-red-200 rounded-md p-4">
-        <p className="text-red-800">
-          Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.
-        </p>
+        <h3 className="text-red-800 font-medium mb-2">🎤 Speech Recognition Not Available</h3>
+        <div className="text-red-700 text-sm space-y-1">
+          {!isHTTPS && (
+            <p>• This feature requires HTTPS connection (you're on HTTP)</p>
+          )}
+          {!hasAPI && (
+            <p>• Please use Chrome, Edge, or Safari for voice recognition</p>
+          )}
+          <p className="mt-2 font-medium">
+            Alternative: You can type your responses instead of speaking them.
+          </p>
+        </div>
       </div>
     )
   }
